@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>La Storia di Jojo · AR Menu</title>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- ===== 1. LIBRARIES =====
+       A-Frame: draws 3D things in the browser.
+       MindAR: uses the camera to find our placemat and tells A-Frame where it is. -->
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+  <script src="menu-data.js"></script>
+
+  <style>
+    :root {
+      --green: #1f6b3a; --green-dark: #154d29; --cream: #faf6ef;
+      --text: #2b2b2b; --muted: #7a7a7a; --gold: #c9a14a;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: "Inter", sans-serif; overflow: hidden; }
+
+    /* ===== 2. ON-SCREEN HINT ("point at the placemat") ===== */
+    .hint {
+      position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+      background: rgba(31,107,58,.92); color: white;
+      padding: 12px 20px; border-radius: 999px;
+      font-size: 14px; font-weight: 500; text-align: center;
+      z-index: 10; max-width: 90%;
+      box-shadow: 0 4px 14px rgba(0,0,0,.25);
+    }
+    .hint.hidden { display: none; }
+
+    /* ===== 3. BOTTOM BUTTONS ===== */
+    .bar {
+      position: fixed; bottom: 20px; left: 0; right: 0;
+      display: flex; justify-content: center; gap: 10px;
+      z-index: 10; padding: 0 16px;
+    }
+    .bar button, .bar a {
+      border: none; border-radius: 999px; padding: 13px 20px;
+      font: 600 14px "Inter", sans-serif; text-decoration: none;
+      box-shadow: 0 6px 18px rgba(0,0,0,.25); cursor: pointer;
+    }
+    .ask   { background: var(--gold); color: white; }
+    .plain { background: white; color: var(--green); }
+
+    /* ===== 4. DISH DETAIL PANEL (same as the plain menu) ===== */
+    .overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.4);
+      display: none; align-items: flex-end; justify-content: center; z-index: 20;
+    }
+    .overlay.open { display: flex; }
+    .sheet {
+      background: white; width: 100%; max-width: 520px;
+      border-radius: 22px 22px 0 0; padding: 22px 20px 30px;
+      max-height: 80vh; overflow-y: auto; animation: slideUp .25s ease-out;
+    }
+    @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+    .sheet .photo { width: 100%; height: 160px; border-radius: 14px; background: #eef3ee;
+                    display: grid; place-items: center; font-size: 64px; margin-bottom: 16px; }
+    .sheet h2 { font-family: "Playfair Display", serif; font-size: 24px; color: var(--text); }
+    .sheet .price { color: var(--gold); font-weight: 600; font-size: 18px; display: block; margin: 4px 0 12px; }
+    .sheet p { color: var(--text); font-size: 15px; line-height: 1.4; }
+    .sheet h4 { font-size: 13px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 16px 0 6px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip { background: #eef3ee; color: var(--green-dark); font-size: 12px; padding: 5px 10px; border-radius: 999px; }
+    .note { font-size: 12px; color: var(--muted) !important; margin-top: 16px; font-style: italic; }
+    .close { margin-top: 20px; width: 100%; padding: 12px; border: none; border-radius: 12px;
+             background: var(--green); color: white; font: 600 15px "Inter", sans-serif; }
+
+    /* ===== 5. ERROR SCREEN (no camera / AR not supported) ===== */
+    .error {
+      position: fixed; inset: 0; background: var(--cream); z-index: 30;
+      display: none; flex-direction: column; align-items: center; justify-content: center;
+      text-align: center; padding: 30px; gap: 14px;
+    }
+    .error.show { display: flex; }
+    .error h2 { font-family: "Playfair Display", serif; color: var(--green); }
+    .error a { background: var(--green); color: white; padding: 13px 22px; border-radius: 999px;
+               text-decoration: none; font-weight: 600; }
+  </style>
+</head>
+<body>
+
+  <div class="hint" id="hint">📷 Point your camera at the placemat on your table</div>
+
+  <div class="bar">
+    <a class="plain" href="index.html">📋 Regular menu</a>
+    <button class="ask" onclick="alert('Jojo the AI waiter is coming in step 4 ✨')">✨ Ask Jojo</button>
+  </div>
+
+  <div class="overlay" id="overlay"><div class="sheet" id="sheet"></div></div>
+
+  <div class="error" id="error">
+    <h2>Camera not available</h2>
+    <p>Your phone or browser couldn't open the camera. No problem, you can use the regular menu.</p>
+    <a href="index.html">Open the menu</a>
+  </div>
+
+  <!-- ===== 6. THE AR SCENE =====
+       mindar-image: which target file to look for. uiScanning/uiLoading: we use our own hint instead.
+       The camera has a "cursor" so taps on the screen can hit the 3D cards (.clickable). -->
+  <a-scene
+    mindar-image="imageTargetSrc: placemat.mind; uiScanning: no; uiLoading: no; uiError: no; filterMinCF: 0.0001; filterBeta: 0.001"
+    color-space="sRGB"
+    renderer="colorManagement: true; physicallyCorrectLights: true"
+    vr-mode-ui="enabled: false"
+    device-orientation-permission-ui="enabled: false">
+
+    <a-camera position="0 0 0" look-controls="enabled: false"
+              cursor="fuse: false; rayOrigin: mouse;" raycaster="far: 10000; objects: .clickable"></a-camera>
+
+    <!-- Everything inside this entity sticks to the placemat.
+         The placemat is 1 unit wide and ~0.71 units tall. -->
+    <a-entity id="anchor" mindar-image-target="targetIndex: 0">
+      <a-entity id="menu"></a-entity>
+    </a-entity>
+  </a-scene>
+
+  <script>
+    // ===== 7. DRAWING A CARD AS AN IMAGE =====
+    // 3D planes can't show HTML, so we draw each card on a canvas (like a mini picture)
+    // and use that picture as the plane's texture.
+    function drawCard(w, h, draw) {
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      const ctx = c.getContext("2d");
+      draw(ctx, w, h);
+      return c;
+    }
+
+    function roundRect(ctx, x, y, w, h, r, fill) {
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, r);
+      ctx.fillStyle = fill;
+      ctx.fill();
+    }
+
+    function dishCanvas(it) {
+      return drawCard(600, 200, (ctx, w, h) => {
+        roundRect(ctx, 0, 0, w, h, 34, "rgba(255,255,255,0.96)");
+        roundRect(ctx, 20, 20, 160, 160, 26, "#eef3ee");                 // photo placeholder
+        ctx.font = "90px serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(MENU_ICONS[it.category] || "🍽️", 100, 104);
+        ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+        ctx.fillStyle = "#2b2b2b"; ctx.font = "600 38px Inter, sans-serif";
+        wrapText(ctx, it.name, 205, 80, 370, 44, 2);                    // name (max 2 lines)
+        ctx.fillStyle = "#c9a14a"; ctx.font = "700 38px Inter, sans-serif";
+        ctx.fillText(it.price.toFixed(2) + " DT", 205, 172);           // price
+      });
+    }
+
+    function tabCanvas(label, active) {
+      return drawCard(400, 110, (ctx, w, h) => {
+        roundRect(ctx, 0, 0, w, h, 55, active ? "#1f6b3a" : "rgba(255,255,255,0.96)");
+        ctx.fillStyle = active ? "white" : "#1f6b3a";
+        ctx.font = "600 44px Inter, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(label, w / 2, h / 2 + 2);
+      });
+    }
+
+    function wrapText(ctx, text, x, y, maxW, lineH, maxLines) {
+      const words = text.split(" "); let line = ""; let lines = 0;
+      for (const word of words) {
+        const test = line ? line + " " + word : word;
+        if (ctx.measureText(test).width > maxW && line) {
+          ctx.fillText(line, x, y); y += lineH; line = word;
+          if (++lines >= maxLines - 1) break;
+        } else line = test;
+      }
+      ctx.fillText(line, x, y);
+    }
+
+    // ===== 8. A COMPONENT THAT PUTS A CANVAS ON A PLANE =====
+    AFRAME.registerComponent("canvas-texture", {
+      init() {
+        const tex = new THREE.CanvasTexture(this.el.canvasSource);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        this.material = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+        // Apply now, and again once A-Frame has finished setting up the plane,
+        // so its default material can't overwrite ours.
+        const apply = () => { const m = this.el.getObject3D("mesh"); if (m) m.material = this.material; };
+        apply();
+        this.el.addEventListener("loaded", apply);
+        setTimeout(apply, 0);
+      }
+    });
+
+    function makePlane(canvas, width, x, y, onTap) {
+      const el = document.createElement("a-plane");
+      el.canvasSource = canvas;
+      const height = width * canvas.height / canvas.width;
+      el.setAttribute("width", width);
+      el.setAttribute("height", height);
+      el.setAttribute("position", `${x} ${y} 0.01`);
+      el.setAttribute("canvas-texture", "");
+      if (onTap) {
+        el.classList.add("clickable");
+        el.addEventListener("click", onTap);
+      }
+      return el;
+    }
+
+    // ===== 9. BUILD THE MENU ON THE PLACEMAT =====
+    let currentTab = "Hot";
+
+    function buildMenu() {
+      const menu = document.getElementById("menu");
+      menu.innerHTML = "";
+
+      // Tabs row, near the top of the placemat
+      const keys = Object.keys(MENU_TABS);
+      keys.forEach((key, i) => {
+        const x = (i - (keys.length - 1) / 2) * 0.3;
+        menu.appendChild(makePlane(tabCanvas(MENU_TABS[key].label, key === currentTab), 0.27, x, 0.27,
+          () => { currentTab = key; buildMenu(); }));
+      });
+
+      // Dish cards: 2 columns, up to 3 rows
+      const visible = MENU_ITEMS.filter(it => MENU_TABS[currentTab].match.includes(it.category));
+      visible.slice(0, 6).forEach((it, i) => {
+        const col = i % 2, row = Math.floor(i / 2);
+        const x = col === 0 ? -0.235 : 0.235;
+        const y = 0.12 - row * 0.165;
+        const card = makePlane(dishCanvas(it), 0.45, x, y, () => openDish(it));
+        // small "pop" animation when the card appears
+        card.setAttribute("animation", `property: scale; from: 0.6 0.6 0.6; to: 1 1 1; dur: 350; delay: ${i * 60}; easing: easeOutBack`);
+        menu.appendChild(card);
+      });
+    }
+
+    // ===== 10. DISH DETAIL PANEL =====
+    function openDish(it) {
+      document.getElementById("sheet").innerHTML = `
+        <div class="photo">${MENU_ICONS[it.category] || "🍽️"}</div>
+        <h2>${it.name}</h2>
+        <span class="price">${it.price.toFixed(2)} DT</span>
+        <p>${it.description || "Description coming soon. Ask the staff for details."}</p>
+        <h4>Ingredients</h4>
+        <div class="chips">${it.ingredients.map(i => `<span class="chip">${i}</span>`).join("")}</div>
+        <h4>Good for</h4>
+        <div class="chips">${it.tags.map(t => `<span class="chip">#${t}</span>`).join("")}</div>
+        <p class="note">Allergies? Please check with the staff before ordering.</p>
+        <button class="close" onclick="closeDish()">Back to the table</button>`;
+      document.getElementById("overlay").classList.add("open");
+    }
+    function closeDish() { document.getElementById("overlay").classList.remove("open"); }
+    document.getElementById("overlay").onclick = (e) => { if (e.target.id === "overlay") closeDish(); };
+
+    // ===== 11. REACT TO THE CAMERA FINDING / LOSING THE PLACEMAT =====
+    const hint = document.getElementById("hint");
+    const anchor = document.getElementById("anchor");
+    anchor.addEventListener("targetFound", () => { hint.classList.add("hidden"); buildMenu(); });
+    anchor.addEventListener("targetLost", () => {
+      hint.textContent = "🔍 Lost the placemat, point your camera at it again";
+      hint.classList.remove("hidden");
+    });
+
+    // If the camera can't start (no permission, no https, old phone) → show the error screen
+    document.querySelector("a-scene").addEventListener("arError", () => {
+      document.getElementById("error").classList.add("show");
+    });
+  </script>
+</body>
+</html>
