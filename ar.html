@@ -12,6 +12,7 @@
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
   <script src="menu-data.js"></script>
+  <script src="jojo-chat.js"></script>
 
   <style>
     :root {
@@ -88,7 +89,7 @@
 
   <div class="bar">
     <a class="plain" href="index.html">📋 Regular menu</a>
-    <button class="ask" onclick="alert('Jojo the AI waiter is coming in step 4 ✨')">✨ Ask Jojo</button>
+    <button class="ask" onclick="JojoChat.open()">✨ Ask Jojo</button>
   </div>
 
   <div class="overlay" id="overlay"><div class="sheet" id="sheet"></div></div>
@@ -138,9 +139,10 @@
       ctx.fill();
     }
 
-    function dishCanvas(it) {
+    function dishCanvas(it, isPick) {
       return drawCard(600, 200, (ctx, w, h) => {
-        roundRect(ctx, 0, 0, w, h, 34, "rgba(255,255,255,0.96)");
+        if (isPick) roundRect(ctx, 0, 0, w, h, 34, "#c9a14a");                  // gold frame
+        roundRect(ctx, isPick ? 8 : 0, isPick ? 8 : 0, isPick ? w - 16 : w, isPick ? h - 16 : h, 30, "rgba(255,255,255,0.96)");
         roundRect(ctx, 20, 20, 160, 160, 26, "#eef3ee");                 // photo placeholder
         ctx.font = "90px serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText(MENU_ICONS[it.category] || "🍽️", 100, 104);
@@ -149,6 +151,11 @@
         wrapText(ctx, it.name, 205, 80, 370, 44, 2);                    // name (max 2 lines)
         ctx.fillStyle = "#c9a14a"; ctx.font = "700 38px Inter, sans-serif";
         ctx.fillText(it.price.toFixed(2) + " DT", 205, 172);           // price
+        if (isPick) {                                                   // "Jojo's pick" badge
+          roundRect(ctx, 390, 140, 185, 42, 21, "#c9a14a");
+          ctx.fillStyle = "white"; ctx.font = "600 24px Inter, sans-serif"; ctx.textAlign = "center";
+          ctx.fillText("★ Jojo's pick", 482, 169);
+        }
       });
     }
 
@@ -205,6 +212,7 @@
 
     // ===== 9. BUILD THE MENU ON THE PLACEMAT =====
     let currentTab = "Hot";
+    let picked = new Set();          // ids of dishes Jojo recommended
 
     function buildMenu() {
       const menu = document.getElementById("menu");
@@ -224,9 +232,14 @@
         const col = i % 2, row = Math.floor(i / 2);
         const x = col === 0 ? -0.235 : 0.235;
         const y = 0.12 - row * 0.165;
-        const card = makePlane(dishCanvas(it), 0.45, x, y, () => openDish(it));
+        const isPick = picked.has(it.id);
+        const card = makePlane(dishCanvas(it, isPick), 0.45, x, y, () => openDish(it));
         // small "pop" animation when the card appears
         card.setAttribute("animation", `property: scale; from: 0.6 0.6 0.6; to: 1 1 1; dur: 350; delay: ${i * 60}; easing: easeOutBack`);
+        if (isPick) {                // picks gently "breathe" so they catch the eye on the table
+          card.setAttribute("animation__pulse", "property: scale; from: 1 1 1; to: 1.06 1.06 1.06; dir: alternate; loop: true; dur: 700; delay: 400; easing: easeInOutSine");
+          card.setAttribute("position", `${x} ${y} 0.02`);   // slightly above the others
+        }
         menu.appendChild(card);
       });
     }
@@ -257,6 +270,15 @@
       hint.textContent = "🔍 Lost the placemat, point your camera at it again";
       hint.classList.remove("hidden");
     });
+
+    // ===== 12. WHEN JOJO RECOMMENDS DISHES =====
+    // Highlight them on the table, and switch to the tab of the first pick.
+    window.onJojoPicks = (ids) => {
+      picked = new Set(ids);
+      const first = MENU_ITEMS.find(it => it.id === ids[0]);
+      currentTab = Object.keys(MENU_TABS).find(k => MENU_TABS[k].match.includes(first.category));
+      buildMenu();
+    };
 
     // If the camera can't start (no permission, no https, old phone) → show the error screen
     document.querySelector("a-scene").addEventListener("arError", () => {
