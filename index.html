@@ -105,7 +105,9 @@
       animation: slideUp .25s ease-out;
     }
     @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-    .sheet .photo { width: 100%; height: 180px; font-size: 64px; margin-bottom: 16px; }
+    .sheet .photo { width: 100%; height: 220px; font-size: 64px; margin-bottom: 16px; }
+    .photo { overflow: hidden; }
+    .photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .sheet h2 { font-family: "Playfair Display", serif; font-size: 24px; }
     .sheet .price { font-size: 18px; display: block; margin: 4px 0 12px; }
     .sheet h4 { font-size: 13px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 16px 0 6px; }
@@ -144,6 +146,7 @@
   <button class="ask" onclick="JojoChat.open()">✨ Ask Jojo</button>
 
   <!-- ===== 7. MENU DATA: loaded from menu-data.js (shared with the AR page) ===== -->
+  <script src="config.js"></script>
   <script src="menu-data.js"></script>
   <script src="jojo-chat.js"></script>
 
@@ -180,12 +183,13 @@
         const card = document.createElement("div");
         card.className = "card" + (picked.has(it.id) ? " picked" : "");
         card.innerHTML = `
-          <div class="photo">${ICON[it.category] || "🍽️"}</div>
+          <div class="photo"></div>
           <div class="info">
             <h3>${it.name}</h3>
             <p>${it.description || "Ask the staff for details."}</p>
             <span class="price">${it.price.toFixed(2)} DT</span>
           </div>`;
+        fillPhotoBox(card.querySelector(".photo"), it);     // real photo if there is one
         card.onclick = () => openDish(it);
         list.appendChild(card);
       }
@@ -194,7 +198,7 @@
     // ===== 11. DISH DETAIL PANEL =====
     function openDish(it) {
       document.getElementById("sheet").innerHTML = `
-        <div class="photo">${ICON[it.category] || "🍽️"}</div>
+        <div class="photo"></div>
         <h2>${it.name}</h2>
         <span class="price">${it.price.toFixed(2)} DT</span>
         <p>${it.description || "Description coming soon. Ask the staff for details."}</p>
@@ -207,6 +211,7 @@
 
         <p class="note">Allergies? Please check with the staff before ordering.</p>
         <button class="close" onclick="closeDish()">Back to menu</button>`;
+      fillPhotoBox(document.querySelector("#sheet .photo"), it);
       document.getElementById("overlay").classList.add("open");
     }
 

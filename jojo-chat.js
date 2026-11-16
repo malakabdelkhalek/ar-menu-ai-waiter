@@ -8,9 +8,17 @@
 //   3. the chat panel shows Jojo's answer + tappable dish cards
 //   4. window.onJojoPicks(ids) lets each page highlight the picks (on the table in AR)
 //
-// In step 4b, a real AI model can replace understand()/recommend() and keep the same output.
+// Step 4b: if API_URL is set, messages go to the AI server (Gemini) first.
+// If the server is slow, asleep or down, Jojo falls back to the rule-based brain below.
 
 (function () {
+  // ---------- 0. SETTINGS ----------
+  // The AI server address is set in config.js. Empty = use only the rule-based brain.
+  const API_URL = (window.JOJO_API_URL || "").trim().replace(/\/+$/, "");
+  // Free servers fall asleep: wake ours up as soon as the page opens, so it's ready when Jojo is asked.
+  if (API_URL && typeof fetch !== "undefined") fetch(API_URL + "/").catch(() => {});
+  const API_TIMEOUT_MS = 30000;     // free servers "sleep" and can take ~30-50 s to wake up the first time
+
   // ---------- 1. WORDS JOJO UNDERSTANDS (English / French / Derja) ----------
   // Each tag from menu-data.js has a list of words that point to it.
   const KEYWORDS = {
@@ -182,7 +190,8 @@
     .jojo-msg.me  { background: #1f6b3a; color: white; align-self: flex-end; border-bottom-right-radius: 4px; }
     .jojo-pick { display: flex; align-items: center; gap: 10px; background: white; border: 2px solid #c9a14a; border-radius: 14px;
                  padding: 8px 12px; cursor: pointer; align-self: flex-start; max-width: 85%; }
-    .jojo-pick .ic { font-size: 24px; }
+    .jojo-pick .ic { font-size: 24px; width: 40px; height: 40px; flex-shrink: 0; display: grid; place-items: center; border-radius: 10px; overflow: hidden; }
+    .jojo-pick .ic img { width: 100%; height: 100%; object-fit: cover; }
     .jojo-pick b { font-size: 14px; color: #2b2b2b; display: block; }
     .jojo-pick span { font-size: 12px; color: #7a7a7a; }
     .jojo-pick .pr { color: #c9a14a; font-weight: 600; margin-left: auto; padding-left: 8px; white-space: nowrap; }
@@ -235,25 +244,81 @@
       const it = p.item;
       const div = document.createElement("div");
       div.className = "jojo-pick";
-      const why = p.reasons.length ? p.reasons.map(r => "#" + r).join(" ") : "house favourite";
-      div.innerHTML = `<span class="ic">${window.MENU_ICONS[it.category] || "🍽️"}</span>
-                       <div><b>${it.name}</b><span>${why}</span></div>
-                       <span class="pr">${it.price.toFixed(2)} DT</span>`;
+      // AI picks come with a "why" sentence; rule-based picks come with matched tags
+      const why = p.why || (p.reasons && p.reasons.length ? p.reasons.map(r => "#" + r).join(" ") : "house favourite");
+      div.innerHTML = `<span class="ic"></span><div><b></b><span class="why"></span></div><span class="pr"></span>`;
+      // textContent (not innerHTML) so text coming from the AI can never inject code into the page
+      window.fillPhotoBox(div.querySelector(".ic"), it);       // photo if there is one, icon otherwise
+      div.querySelector("b").textContent = it.name;
+      div.querySelector(".why").textContent = why;
+      div.querySelector(".pr").textContent = it.price.toFixed(2) + " DT";
       // tap a pick: close the chat and open that dish's details
       div.onclick = () => { close(); if (window.openDish) window.openDish(it); };
       msgs.appendChild(div);
       msgs.scrollTop = msgs.scrollHeight;
     }
 
-    function ask(text) {
-      if (!text.trim()) return;
+    const history = [];               // last turns, so the AI remembers the conversation
+    let busy = false;
+
+    function showAnswer(res) {
+      addMsg(res.text, "bot");
+      res.picks.forEach(addPick);
+      if (res.picks.length && window.onJojoPicks) window.onJojoPicks(res.picks.map(p => p.item.id));
+    }
+
+    // Ask the AI server. Returns {text, picks} or throws if anything goes wrong.
+    async function askServer(text) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), API_TIMEOUT_MS);
+      try {
+        const r = await fetch(API_URL + "/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text, history: history.slice(-6) }),
+          signal: ctrl.signal
+        });
+        if (!r.ok) throw new Error("server " + r.status);
+        const data = await r.json();
+        const picks = (data.picks || [])
+          .map(p => ({ item: window.MENU_ITEMS.find(it => it.id === p.id), why: p.why }))
+          .filter(p => p.item);                       // ignore any id the page doesn't know
+        return { text: data.reply, picks };
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    async function ask(text) {
+      text = text.trim();
+      if (!text || busy) return;
+      busy = true;
       addMsg(text, "me");
-      const res = answer(text);
-      setTimeout(() => {                                   // tiny delay feels more natural
-        addMsg(res.text, "bot");
-        res.picks.forEach(addPick);
-        if (res.picks.length && window.onJojoPicks) window.onJojoPicks(res.picks.map(p => p.item.id));
-      }, 350);
+
+      if (!API_URL) {                                  // no server: rule-based brain only
+        setTimeout(() => { showAnswer(answer(text)); busy = false; }, 350);
+        return;
+      }
+
+      const thinking = document.createElement("div");
+      thinking.className = "jojo-msg bot";
+      thinking.textContent = "Jojo is thinking… ☕";
+      msgs.appendChild(thinking);
+      msgs.scrollTop = msgs.scrollHeight;
+      const slow = setTimeout(() => { thinking.textContent = "Warming up the coffee machine, one moment… ☕"; }, 5000);
+
+      let res;
+      try {
+        res = await askServer(text);
+      } catch (e) {
+        console.warn("Jojo server unavailable, using the offline brain:", e.message);
+        res = answer(text);                            // fallback: Jojo never goes silent
+      }
+      clearTimeout(slow);
+      thinking.remove();
+      showAnswer(res);
+      history.push({ role: "user", text: text.slice(0, 600) }, { role: "jojo", text: res.text.slice(0, 600) });
+      busy = false;
     }
 
     panel.querySelector("form").onsubmit = e => { e.preventDefault(); ask(input.value); input.value = ""; };

@@ -11,6 +11,7 @@
        MindAR: uses the camera to find our placemat and tells A-Frame where it is. -->
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+  <script src="config.js"></script>
   <script src="menu-data.js"></script>
   <script src="jojo-chat.js"></script>
 
@@ -21,6 +22,7 @@
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: "Inter", sans-serif; overflow: hidden; }
+    .a-enter-vr, .a-enter-ar { display: none !important; }   /* hide A-Frame's own VR/fullscreen button */
 
     /* ===== 2. ON-SCREEN HINT ("point at the placemat") ===== */
     .hint {
@@ -59,8 +61,9 @@
       max-height: 80vh; overflow-y: auto; animation: slideUp .25s ease-out;
     }
     @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-    .sheet .photo { width: 100%; height: 160px; border-radius: 14px; background: #eef3ee;
+    .sheet .photo { width: 100%; height: 200px; border-radius: 14px; background: #eef3ee; overflow: hidden;
                     display: grid; place-items: center; font-size: 64px; margin-bottom: 16px; }
+    .sheet .photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .sheet h2 { font-family: "Playfair Display", serif; font-size: 24px; color: var(--text); }
     .sheet .price { color: var(--gold); font-weight: 600; font-size: 18px; display: block; margin: 4px 0 12px; }
     .sheet p { color: var(--text); font-size: 15px; line-height: 1.4; }
@@ -139,13 +142,23 @@
       ctx.fill();
     }
 
-    function dishCanvas(it, isPick) {
+    // photo: the loaded dish photo, or null to draw the icon instead
+    function dishCanvas(it, isPick, photo) {
       return drawCard(600, 200, (ctx, w, h) => {
         if (isPick) roundRect(ctx, 0, 0, w, h, 34, "#c9a14a");                  // gold frame
         roundRect(ctx, isPick ? 8 : 0, isPick ? 8 : 0, isPick ? w - 16 : w, isPick ? h - 16 : h, 30, "rgba(255,255,255,0.96)");
-        roundRect(ctx, 20, 20, 160, 160, 26, "#eef3ee");                 // photo placeholder
-        ctx.font = "90px serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillText(MENU_ICONS[it.category] || "🍽️", 100, 104);
+        roundRect(ctx, 20, 20, 160, 160, 26, "#eef3ee");                 // photo box
+        if (photo) {
+          // crop the photo to a centered square and clip it to the rounded box
+          const side = Math.min(photo.width, photo.height);
+          ctx.save();
+          ctx.beginPath(); ctx.roundRect(20, 20, 160, 160, 26); ctx.clip();
+          ctx.drawImage(photo, (photo.width - side) / 2, (photo.height - side) / 2, side, side, 20, 20, 160, 160);
+          ctx.restore();
+        } else {
+          ctx.font = "90px serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(MENU_ICONS[it.category] || "🍽️", 100, 104);
+        }
         ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
         ctx.fillStyle = "#2b2b2b"; ctx.font = "600 38px Inter, sans-serif";
         wrapText(ctx, it.name, 205, 80, 370, 44, 2);                    // name (max 2 lines)
@@ -234,6 +247,15 @@
         const y = 0.12 - row * 0.165;
         const isPick = picked.has(it.id);
         const card = makePlane(dishCanvas(it, isPick), 0.45, x, y, () => openDish(it));
+        // when the dish has a real photo, redraw the card with it
+        loadDishPhoto(it.id).then(photo => {
+          if (!photo || !card.isConnected) return;
+          const ctx = card.canvasSource.getContext("2d");
+          ctx.clearRect(0, 0, 600, 200);
+          ctx.drawImage(dishCanvas(it, isPick, photo), 0, 0);
+          const mesh = card.getObject3D("mesh");
+          if (mesh && mesh.material.map) mesh.material.map.needsUpdate = true;
+        });
         // small "pop" animation when the card appears
         card.setAttribute("animation", `property: scale; from: 0.6 0.6 0.6; to: 1 1 1; dur: 350; delay: ${i * 60}; easing: easeOutBack`);
         if (isPick) {                // picks gently "breathe" so they catch the eye on the table
@@ -247,7 +269,7 @@
     // ===== 10. DISH DETAIL PANEL =====
     function openDish(it) {
       document.getElementById("sheet").innerHTML = `
-        <div class="photo">${MENU_ICONS[it.category] || "🍽️"}</div>
+        <div class="photo"></div>
         <h2>${it.name}</h2>
         <span class="price">${it.price.toFixed(2)} DT</span>
         <p>${it.description || "Description coming soon. Ask the staff for details."}</p>
@@ -257,6 +279,7 @@
         <div class="chips">${it.tags.map(t => `<span class="chip">#${t}</span>`).join("")}</div>
         <p class="note">Allergies? Please check with the staff before ordering.</p>
         <button class="close" onclick="closeDish()">Back to the table</button>`;
+      fillPhotoBox(document.querySelector("#sheet .photo"), it);
       document.getElementById("overlay").classList.add("open");
     }
     function closeDish() { document.getElementById("overlay").classList.remove("open"); }

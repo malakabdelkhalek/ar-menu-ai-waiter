@@ -29,3 +29,36 @@ window.MENU_TABS = {
 
 // Placeholder icon per category until we have real photos
 window.MENU_ICONS = { Hot: "☕", Cold: "🥤", Breakfast: "🥐", Savory: "🍳" };
+
+// ===== DISH PHOTOS =====
+// Put a photo for a dish in the "photos" folder, named after the dish id:
+//   photos/hot-01.jpg, photos/cold-04.jpg, photos/food-02.jpg ...
+// Dishes without a photo keep the icon above. No code change is needed.
+window.dishPhotoUrl = (id) => "photos/" + id + ".jpg";
+
+// Loads a dish photo once and remembers the result. Gives null when there is no photo.
+const _photoCache = {};
+window.loadDishPhoto = (id) => {
+  if (!_photoCache[id]) {
+    _photoCache[id] = new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = window.dishPhotoUrl(id);
+    });
+  }
+  return _photoCache[id];
+};
+
+// Fills a ".photo" box: shows the icon first, then swaps in the real photo if one exists.
+window.fillPhotoBox = (box, item) => {
+  box.textContent = window.MENU_ICONS[item.category] || "🍽️";
+  window.loadDishPhoto(item.id).then((img) => {
+    if (!img) return;
+    const el = document.createElement("img");
+    el.src = img.src;
+    el.alt = item.name;
+    box.textContent = "";
+    box.appendChild(el);
+  });
+};
