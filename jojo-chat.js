@@ -10,6 +10,10 @@
 //
 // Step 4b: if API_URL is set, messages go to the AI server (Gemini) first.
 // If the server is slow, asleep or down, Jojo falls back to the rule-based brain below.
+//
+// Step 5: Jojo speaks first. A greeting bubble offers help (JojoChat.nudge), then a quiz
+// with tap-to-vote answers (drink/food, hot/cold, mood, budget). The quiz uses what Jojo
+// has learned from other customers (jojo-learn.js) to rank dishes.
 
 (function () {
   // ---------- 0. SETTINGS ----------
@@ -172,6 +176,49 @@
     return { text: intro, picks };
   }
 
+  // ---------- 4b. THE QUIZ BRAIN ----------
+  // Each mood points to the menu tags that suit it.
+  const MOODS = {
+    energy:  { label: "⚡ I need energy",   short: "an energy boost ⚡", tags: ["caffeine", "strong"],                   result: "Something to wake you up ⚡" },
+    treat:   { label: "🍰 I want a treat",  short: "a sweet treat 🍰",   tags: ["sweet", "treat", "creamy"],            result: "Treat time 🍰" },
+    relax:   { label: "😌 Just relaxing",   short: "something relaxing 😌", tags: ["light", "fresh", "fruity", "no-caffeine"], result: "Slow and easy 😌" },
+    hungry:  { label: "😋 I'm hungry",      short: "a real bite 😋",     tags: ["filling", "savory", "creamy"],         result: "Let's fix that hunger 😋" },
+    friends: { label: "👯 I'm with friends", short: "something to share 👯", tags: ["sharing", "treat", "signature"],   result: "Good company deserves good choices 👯" }
+  };
+  const BUDGET_CAP = { low: 8, mid: 15, any: Infinity };
+
+  // a = { want: "drink"|"food"|"both", temp: "hot"|"cold"|"any", mood: "...", budget: "low"|"mid"|"any" }
+  function quizPicks(a) {
+    const learn = window.JojoLearn;
+    const isDrink = it => it.category === "Hot" || it.category === "Cold";
+
+    // 1. Keep only what they asked for (drink/food, hot/cold)
+    const base = window.MENU_ITEMS.filter(it => {
+      if (a.want === "drink" && !isDrink(it)) return false;
+      if (a.want === "food" && isDrink(it)) return false;
+      if (isDrink(it) && a.temp === "hot" && it.category !== "Hot") return false;
+      if (isDrink(it) && a.temp === "cold" && it.category !== "Cold") return false;
+      return true;
+    });
+
+    // 2. Budget. If nothing fits, show the closest choices and say so.
+    let pool = base.filter(it => it.price <= BUDGET_CAP[a.budget]);
+    const overBudget = pool.length === 0;
+    if (overBudget) pool = base.slice().sort((x, y) => x.price - y.price).slice(0, 3);
+
+    // 3. Score: +2 per mood tag, up to +3 if people in the same mood love this dish
+    const scored = pool.map(it => {
+      const matched = MOODS[a.mood].tags.filter(t => it.tags.includes(t));
+      const boost = learn ? learn.dishBoost(a.mood, it.id) : 0;
+      const score = matched.length * 2 + boost * 3 + (it.tags.includes("signature") ? 0.5 : 0);
+      const why = boost >= 0.5 ? "🔥 popular with people in this mood"
+                : matched.length ? matched.map(t => "#" + t).join(" ") : "house favourite";
+      return { item: it, score, why };
+    });
+    scored.sort((x, y) => y.score - x.score || x.item.price - y.item.price);
+    return { picks: scored.slice(0, 3), overBudget };
+  }
+
   // ---------- 5. THE CHAT PANEL ----------
   const css = `
     .jojo-panel { position: fixed; inset: 0; z-index: 40; display: none; align-items: flex-end; justify-content: center; background: rgba(0,0,0,.35); }
@@ -195,6 +242,22 @@
     .jojo-pick b { font-size: 14px; color: #2b2b2b; display: block; }
     .jojo-pick span { font-size: 12px; color: #7a7a7a; }
     .jojo-pick .pr { color: #c9a14a; font-weight: 600; margin-left: auto; padding-left: 8px; white-space: nowrap; }
+    .jojo-opts { display: flex; flex-wrap: wrap; gap: 8px; align-self: stretch; }
+    .jojo-opt { border: 2px solid #1f6b3a; background: white; color: #1f6b3a; border-radius: 14px; padding: 11px 14px;
+                font: 600 14px Inter, sans-serif; cursor: pointer; flex: 1 1 40%; text-align: center; }
+    .jojo-opt.hot { border-color: #c9a14a; background: #fbf3df; color: #7a5a12; flex-basis: 100%; }
+    .jojo-opt:disabled { opacity: .45; cursor: default; }
+    .jojo-opt.chosen { opacity: 1; background: #1f6b3a; color: white; border-color: #1f6b3a; }
+    .jojo-nudge { position: fixed; left: 50%; bottom: 86px; transform: translateX(-50%); z-index: 15; width: calc(100% - 32px); max-width: 360px;
+                  background: white; border-radius: 18px; padding: 14px; box-shadow: 0 8px 28px rgba(0,0,0,.28);
+                  font-family: Inter, sans-serif; animation: jojoNudge .4s ease-out; }
+    @keyframes jojoNudge { from { transform: translate(-50%, 30px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+    .jojo-nudge p { font-size: 14px; line-height: 1.4; color: #2b2b2b; margin-bottom: 10px; }
+    .jojo-nudge b { color: #1f6b3a; }
+    .jojo-nudge div { display: flex; gap: 8px; }
+    .jojo-nudge button { flex: 1; border-radius: 999px; padding: 10px; font: 600 14px Inter, sans-serif; cursor: pointer; border: 1.5px solid #1f6b3a; }
+    .jojo-nudge .yes { background: #1f6b3a; color: white; }
+    .jojo-nudge .no { background: white; color: #1f6b3a; }
     .jojo-chips { display: flex; gap: 6px; overflow-x: auto; padding: 0 16px 10px; }
     .jojo-chips button { flex-shrink: 0; border: 1.5px solid #1f6b3a; background: white; color: #1f6b3a; border-radius: 999px;
                          padding: 7px 12px; font: 500 13px Inter, sans-serif; cursor: pointer; }
@@ -321,20 +384,120 @@
       busy = false;
     }
 
+    // ---------- 6. THE QUIZ (tap-to-vote) ----------
+    // Shows a row of big buttons. When one is tapped, the row locks and onPick(value) runs.
+    function addOptions(options, onPick) {
+      const row = document.createElement("div");
+      row.className = "jojo-opts";
+      options.forEach(o => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "jojo-opt" + (o.hot ? " hot" : "");
+        b.textContent = o.label;
+        b.onclick = () => {
+          row.querySelectorAll("button").forEach(x => x.disabled = true);
+          b.classList.add("chosen");
+          setTimeout(() => onPick(o.value), 300);
+        };
+        row.appendChild(b);
+      });
+      msgs.appendChild(row);
+      msgs.scrollTop = msgs.scrollHeight;
+    }
+
+    function startQuiz() {
+      msgs.querySelectorAll(".jojo-opt").forEach(x => x.disabled = true);     // lock any older quiz
+      const learn = window.JojoLearn;
+      const popular = learn ? learn.popularMood() : null;                     // what Jojo learned
+      const a = { want: "both", temp: "any", mood: null, budget: "any" };
+
+      const first = [
+        { label: "🥤 A drink", value: "drink" },
+        { label: "🍽️ Food", value: "food" },
+        { label: "Both", value: "both" }
+      ];
+      // Learned shortcut: offer the mood most customers are in right now
+      if (popular) first.push({ label: "🔥 Most people right now want " + MOODS[popular].short + ". Show me!", value: "popular", hot: true });
+
+      addMsg("Let's find your order in a few taps 👇\nWhat are you here for?", "bot");
+      addOptions(first, v => {
+        if (v === "popular") { a.mood = popular; return finish(false); }
+        a.want = v;
+        v === "food" ? askMood() : askTemp();
+      });
+
+      function askTemp() {
+        addMsg("Hot or cold?", "bot");
+        addOptions([
+          { label: "☕ Hot", value: "hot" },
+          { label: "🧊 Cold", value: "cold" },
+          { label: "Surprise me", value: "any" }
+        ], v => { a.temp = v; askMood(); });
+      }
+
+      function askMood() {
+        addMsg("How are you feeling right now?", "bot");
+        const keys = Object.keys(MOODS).sort((x, y) => (y === popular) - (x === popular));   // popular mood first
+        addOptions(keys.map(k => ({ label: MOODS[k].label + (k === popular ? "  🔥 popular" : ""), value: k, hot: k === popular })),
+          v => { a.mood = v; askBudget(); });
+      }
+
+      function askBudget() {
+        addMsg("Last one: your budget per item?", "bot");
+        addOptions([
+          { label: "Under 8 DT", value: "low" },
+          { label: "Up to 15 DT", value: "mid" },
+          { label: "No limit", value: "any" }
+        ], v => { a.budget = v; finish(true); });
+      }
+
+      function finish(countVote) {
+        if (learn) learn.logQuiz(a, countVote);          // Jojo learns from this customer
+        const { picks, overBudget } = quizPicks(a);
+        let text = MOODS[a.mood].result + "\nHere's your story for today:";
+        if (overBudget) text = MOODS[a.mood].result + "\nNothing fits that budget in this style, so here are the closest choices:";
+        showAnswer({ text, picks });
+        addMsg("Tap a dish to see it. You can also type anything you'd like to ask.", "bot");
+        addOptions([{ label: "🔁 Start again", value: "again" }], startQuiz);
+      }
+    }
+
+    // ---------- 7. JOJO SPEAKS FIRST ----------
+    // A small bubble above the buttons, shown once per visit by the page (JojoChat.nudge()).
+    let opened = false;
+    let nudgeEl = null;
+
+    function nudge() {
+      if (opened || nudgeEl) return;
+      try {
+        if (sessionStorage.getItem("jojo_nudged")) return;
+        sessionStorage.setItem("jojo_nudged", "1");
+      } catch (e) { /* private mode: just show it */ }
+      nudgeEl = document.createElement("div");
+      nudgeEl.className = "jojo-nudge";
+      nudgeEl.innerHTML = `<p><b>Hiii 👋 I'm Jojo.</b> Seems like you're discovering the menu. Do you need help choosing your order?</p>
+                           <div><button class="yes">Yes, help me!</button><button class="no">No thanks</button></div>`;
+      nudgeEl.querySelector(".yes").onclick = () => { open(); startQuiz(); };
+      nudgeEl.querySelector(".no").onclick = hideNudge;
+      document.body.appendChild(nudgeEl);
+    }
+    function hideNudge() { if (nudgeEl) { nudgeEl.remove(); nudgeEl = null; } }
+
     panel.querySelector("form").onsubmit = e => { e.preventDefault(); ask(input.value); input.value = ""; };
     panel.querySelectorAll(".jojo-chips button").forEach(b => b.onclick = () => ask(b.textContent));
     panel.querySelector(".jojo-x").onclick = close;
     panel.onclick = e => { if (e.target === panel) close(); };
 
-    addMsg("Ahla! I'm Jojo ☕ Not sure what to have? Tell me your mood, or tap an idea below.", "bot");
+    addMsg("Ahla! I'm Jojo ☕ Not sure what to have? I can guide you, or just tell me your mood.", "bot");
+    addOptions([{ label: "🎯 Help me choose in a few taps", value: "quiz" }], startQuiz);
 
-    function open() { panel.classList.add("open"); setTimeout(() => input.focus(), 300); }
+    function open() { opened = true; hideNudge(); panel.classList.add("open"); }
     function close() { panel.classList.remove("open"); }
-    window.JojoChat = { open, close };
+    window.JojoChat = { open, close, nudge, startQuiz };
   }
 
   // Exposed for testing (node) and for step 4b
-  window.JojoBrain = { understand, recommend, answer };
+  window.JojoBrain = { understand, recommend, answer, quizPicks, MOODS };
   if (typeof document !== "undefined") {
     document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", build) : build();
   }

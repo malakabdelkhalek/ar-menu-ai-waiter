@@ -13,6 +13,7 @@
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
   <script src="config.js"></script>
   <script src="menu-data.js"></script>
+  <script src="jojo-learn.js"></script>
   <script src="jojo-chat.js"></script>
 
   <style>
@@ -181,6 +182,54 @@
       });
     }
 
+    // The dish "served" on the table: a round plate with the dish photo on it.
+    function plateCanvas(it, photo) {
+      return drawCard(700, 700, (ctx, w, h) => {
+        const cx = w / 2, cy = h / 2;
+        ctx.beginPath(); ctx.arc(cx + 8, cy + 14, 322, 0, Math.PI * 2);          // soft shadow on the table
+        ctx.fillStyle = "rgba(0,0,0,0.28)"; ctx.fill();
+        ctx.beginPath(); ctx.arc(cx, cy, 322, 0, Math.PI * 2);                    // plate rim
+        ctx.fillStyle = "#ffffff"; ctx.fill();
+        ctx.beginPath(); ctx.arc(cx, cy, 300, 0, Math.PI * 2);
+        ctx.strokeStyle = "#e3ddd0"; ctx.lineWidth = 4; ctx.stroke();
+        ctx.save();
+        ctx.beginPath(); ctx.arc(cx, cy, 268, 0, Math.PI * 2); ctx.clip();        // the food area
+        if (photo) {
+          const side = Math.min(photo.width, photo.height);
+          ctx.drawImage(photo, (photo.width - side) / 2, (photo.height - side) / 2, side, side, cx - 268, cy - 268, 536, 536);
+        } else {
+          ctx.fillStyle = "#f3efe6"; ctx.fillRect(0, 0, w, h);
+          ctx.font = "260px serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(MENU_ICONS[it.category] || "🍽️", cx, cy + 14);
+        }
+        ctx.restore();
+      });
+    }
+
+    function labelCanvas(it) {
+      return drawCard(900, 150, (ctx, w, h) => {
+        roundRect(ctx, 0, 0, w, h, 75, "rgba(255,255,255,0.97)");
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "#c9a14a"; ctx.font = "700 50px Inter, sans-serif"; ctx.textAlign = "right";
+        const price = it.price.toFixed(2) + " DT";
+        ctx.fillText(price, w - 50, h / 2 + 2);
+        const room = w - 100 - ctx.measureText(price).width - 30;                 // space left for the name
+        ctx.fillStyle = "#2b2b2b"; ctx.textAlign = "left";
+        let size = 52;
+        do { ctx.font = `600 ${size}px Inter, sans-serif`; size -= 2; } while (ctx.measureText(it.name).width > room && size > 26);
+        ctx.fillText(it.name, 50, h / 2 + 2);
+      });
+    }
+
+    function buttonCanvas(label, filled) {
+      return drawCard(360, 120, (ctx, w, h) => {
+        roundRect(ctx, 0, 0, w, h, 60, filled ? "#c9a14a" : "rgba(255,255,255,0.97)");
+        ctx.fillStyle = filled ? "white" : "#1f6b3a";
+        ctx.font = "600 46px Inter, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(label, w / 2, h / 2 + 2);
+      });
+    }
+
     function wrapText(ctx, text, x, y, maxW, lineH, maxLines) {
       const words = text.split(" "); let line = ""; let lines = 0;
       for (const word of words) {
@@ -226,10 +275,41 @@
     // ===== 9. BUILD THE MENU ON THE PLACEMAT =====
     let currentTab = "Hot";
     let picked = new Set();          // ids of dishes Jojo recommended
+    let tableDish = null;            // the dish currently "served" on the table, or null for the menu
+
+    // The placemat is an A4 sheet: 1 unit = 29.7 cm. So sizes below are real-life sizes:
+    // a food plate of 0.70 units is about 21 cm wide, a drink of 0.46 about 14 cm.
+    function buildDishOnTable(menu, it) {
+      const isDrink = it.category === "Hot" || it.category === "Cold";
+      const size = isDrink ? 0.46 : 0.70;
+
+      const plate = makePlane(plateCanvas(it, null), size, 0, 0.02, () => openDetails(it));
+      plate.setAttribute("position", "0 0.02 0.02");
+      plate.setAttribute("animation", "property: scale; from: 0.15 0.15 0.15; to: 1 1 1; dur: 550; easing: easeOutBack");
+      menu.appendChild(plate);
+      loadDishPhoto(it.id).then(photo => {                 // put the real photo on the plate when there is one
+        if (!photo || !plate.isConnected) return;
+        const ctx = plate.canvasSource.getContext("2d");
+        ctx.clearRect(0, 0, 700, 700);
+        ctx.drawImage(plateCanvas(it, photo), 0, 0);
+        const mesh = plate.getObject3D("mesh");
+        if (mesh && mesh.material.map) mesh.material.map.needsUpdate = true;
+      });
+
+      const below = 0.02 - size / 2 - 0.075;
+      const label = makePlane(labelCanvas(it), 0.62, 0, below, () => openDetails(it));
+      label.setAttribute("animation", "property: scale; from: 0.6 0.6 0.6; to: 1 1 1; dur: 350; delay: 250; easing: easeOutBack");
+      menu.appendChild(label);
+
+      const above = 0.02 + size / 2 + 0.075;
+      menu.appendChild(makePlane(buttonCanvas("‹ Menu", false), 0.24, -0.17, above, () => { tableDish = null; buildMenu(); }));
+      menu.appendChild(makePlane(buttonCanvas("Details ›", true), 0.24, 0.17, above, () => openDetails(it)));
+    }
 
     function buildMenu() {
       const menu = document.getElementById("menu");
       menu.innerHTML = "";
+      if (tableDish) { buildDishOnTable(menu, tableDish); return; }
 
       // Tabs row, near the top of the placemat
       const keys = Object.keys(MENU_TABS);
@@ -266,8 +346,15 @@
       });
     }
 
-    // ===== 10. DISH DETAIL PANEL =====
+    // ===== 10. TAP A DISH: SERVE IT ON THE TABLE, THEN DETAILS =====
+    // openDish is also what Jojo's chat calls when a recommended dish is tapped.
     function openDish(it) {
+      JojoLearn.dishOpened(it.id);       // Jojo learns which dishes people look at
+      tableDish = it;
+      buildMenu();
+    }
+
+    function openDetails(it) {
       document.getElementById("sheet").innerHTML = `
         <div class="photo"></div>
         <h2>${it.name}</h2>
@@ -288,7 +375,13 @@
     // ===== 11. REACT TO THE CAMERA FINDING / LOSING THE PLACEMAT =====
     const hint = document.getElementById("hint");
     const anchor = document.getElementById("anchor");
-    anchor.addEventListener("targetFound", () => { hint.classList.add("hidden"); buildMenu(); });
+    let greeted = false;
+    anchor.addEventListener("targetFound", () => {
+      hint.classList.add("hidden");
+      buildMenu();
+      // Jojo speaks first: a few seconds after the menu appears, offer help (once per visit)
+      if (!greeted) { greeted = true; setTimeout(() => JojoChat.nudge(), 4000); }
+    });
     anchor.addEventListener("targetLost", () => {
       hint.textContent = "🔍 Lost the placemat, point your camera at it again";
       hint.classList.remove("hidden");
@@ -298,6 +391,7 @@
     // Highlight them on the table, and switch to the tab of the first pick.
     window.onJojoPicks = (ids) => {
       picked = new Set(ids);
+      tableDish = null;                                   // back to the menu so the picks are visible
       const first = MENU_ITEMS.find(it => it.id === ids[0]);
       currentTab = Object.keys(MENU_TABS).find(k => MENU_TABS[k].match.includes(first.category));
       buildMenu();

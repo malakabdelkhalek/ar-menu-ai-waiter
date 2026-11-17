@@ -148,6 +148,7 @@
   <!-- ===== 7. MENU DATA: loaded from menu-data.js (shared with the AR page) ===== -->
   <script src="config.js"></script>
   <script src="menu-data.js"></script>
+  <script src="jojo-learn.js"></script>
   <script src="jojo-chat.js"></script>
 
   <script>
@@ -197,6 +198,7 @@
 
     // ===== 11. DISH DETAIL PANEL =====
     function openDish(it) {
+      JojoLearn.dishOpened(it.id);       // Jojo learns which dishes people look at
       document.getElementById("sheet").innerHTML = `
         <div class="photo"></div>
         <h2>${it.name}</h2>
@@ -236,6 +238,10 @@
       currentTab = Object.keys(TABS).find(k => TABS[k].match.includes(first.category));
       renderTabs(); renderList();
     };
+
+    // ===== 14. JOJO SPEAKS FIRST =====
+    // After a few seconds of browsing, Jojo offers to help (once per visit).
+    setTimeout(() => JojoChat.nudge(), 6000);
   </script>
 </body>
 </html>
